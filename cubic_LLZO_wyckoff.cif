@@ -1,0 +1,173 @@
+####################################################################### 
+# 
+# This file contains crystal structure data downloaded from the 
+# Cambridge Structural Database (CSD) hosted by the Cambridge 
+# Crystallographic Data Centre (CCDC) in cooperation with FIZ Karlsruhe.
+# 
+# Please note that these data are only for research purposes or private use.
+# For detailed information please see under Terms & Conditions.
+# Full information about CCDC and FIZ Karlsruhe data access policies and 
+# citation guidelines are available at http://www.ccdc.cam.ac.uk/access/V1
+# 
+# Audit and citation data items may have been added by FIZ Karlsruhe. 
+# Please retain this information to preserve the provenance of 
+# this file and to allow appropriate attribution of the data. 
+# 
+#######################################################################
+
+data_422259-ICSD
+_database_code_depnum_ccdc_archive 'CCDC 1733933'
+loop_
+_citation_id
+_citation_doi
+_citation_year
+1 10.1246/cl.2011.60 2011
+_audit_update_record             
+;
+2018-03-01 deposited with the CCDC.	2025-05-08 downloaded from the CCDC.
+;
+_database_code_ICSD              422259
+_chemical_name_systematic        
+;
+Lithium Lanthanum Zirconium Oxide (7/3/2/12)
+;
+_chemical_formula_sum            'La3 Li7 O12 Zr2'
+_cell_length_a                   12.9827
+_cell_length_b                   12.9827
+_cell_length_c                   12.9827
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+_cell_volume                     2188.24
+_cell_formula_units_Z            8
+_symmetry_space_group_name_H-M   'I a -3 d'
+_symmetry_Int_Tables_number      230
+_symmetry_cell_setting           cubic
+_refine_ls_R_factor_all          0.0161
+loop_
+_symmetry_equiv_pos_site_id
+_symmetry_equiv_pos_as_xyz
+1 '-z+3/4, y+1/4, x+3/4'
+2 'z+3/4, -y+3/4, x+1/4'
+3 'z+1/4, y+3/4, -x+3/4'
+4 '-z+1/4, -y+1/4, -x+1/4'
+5 'y+1/4, x+3/4, -z+3/4'
+6 '-y+3/4, x+1/4, z+3/4'
+7 'y+3/4, -x+3/4, z+1/4'
+8 '-y+1/4, -x+1/4, -z+1/4'
+9 'x+3/4, -z+3/4, y+1/4'
+10 'x+1/4, z+3/4, -y+3/4'
+11 '-x+3/4, z+1/4, y+3/4'
+12 '-x+1/4, -z+1/4, -y+1/4'
+13 'z+3/4, -y+1/4, -x+3/4'
+14 '-z+3/4, y+3/4, -x+1/4'
+15 '-z+1/4, -y+3/4, x+3/4'
+16 'z+1/4, y+1/4, x+1/4'
+17 '-y+1/4, -x+3/4, z+3/4'
+18 'y+3/4, -x+1/4, -z+3/4'
+19 '-y+3/4, x+3/4, -z+1/4'
+20 'y+1/4, x+1/4, z+1/4'
+21 '-x+3/4, z+3/4, -y+1/4'
+22 '-x+1/4, -z+3/4, y+3/4'
+23 'x+3/4, -z+1/4, -y+3/4'
+24 'x+1/4, z+1/4, y+1/4'
+25 '-z+1/2, x+1/2, y'
+26 'z+1/2, x, -y+1/2'
+27 'z, -x+1/2, y+1/2'
+28 '-z, -x, -y'
+29 'y, -z+1/2, x+1/2'
+30 '-y+1/2, z+1/2, x'
+31 'y+1/2, z, -x+1/2'
+32 '-y, -z, -x'
+33 'x+1/2, y, -z+1/2'
+34 'x, -y+1/2, z+1/2'
+35 '-x+1/2, y+1/2, z'
+36 '-x, -y, -z'
+37 'z+1/2, -x+1/2, -y'
+38 '-z+1/2, -x, y+1/2'
+39 '-z, x+1/2, -y+1/2'
+40 'z, x, y'
+41 '-y, z+1/2, -x+1/2'
+42 'y+1/2, -z+1/2, -x'
+43 '-y+1/2, -z, x+1/2'
+44 'y, z, x'
+45 '-x+1/2, -y, z+1/2'
+46 '-x, y+1/2, -z+1/2'
+47 'x+1/2, -y+1/2, -z'
+48 'x, y, z'
+49 '-z+1/4, y+3/4, x+1/4'
+50 'z+1/4, -y+1/4, x+3/4'
+51 'z+3/4, y+1/4, -x+1/4'
+52 '-z+3/4, -y+3/4, -x+3/4'
+53 'y+3/4, x+1/4, -z+1/4'
+54 '-y+1/4, x+3/4, z+1/4'
+55 'y+1/4, -x+1/4, z+3/4'
+56 '-y+3/4, -x+3/4, -z+3/4'
+57 'x+1/4, -z+1/4, y+3/4'
+58 'x+3/4, z+1/4, -y+1/4'
+59 '-x+1/4, z+3/4, y+1/4'
+60 '-x+3/4, -z+3/4, -y+3/4'
+61 'z+1/4, -y+3/4, -x+1/4'
+62 '-z+1/4, y+1/4, -x+3/4'
+63 '-z+3/4, -y+1/4, x+1/4'
+64 'z+3/4, y+3/4, x+3/4'
+65 '-y+3/4, -x+1/4, z+1/4'
+66 'y+1/4, -x+3/4, -z+1/4'
+67 '-y+1/4, x+1/4, -z+3/4'
+68 'y+3/4, x+3/4, z+3/4'
+69 '-x+1/4, z+1/4, -y+3/4'
+70 '-x+3/4, -z+1/4, y+1/4'
+71 'x+1/4, -z+3/4, -y+1/4'
+72 'x+3/4, z+3/4, y+3/4'
+73 '-z, x, y+1/2'
+74 'z, x+1/2, -y'
+75 'z+1/2, -x, y'
+76 '-z+1/2, -x+1/2, -y+1/2'
+77 'y+1/2, -z, x'
+78 '-y, z, x+1/2'
+79 'y, z+1/2, -x'
+80 '-y+1/2, -z+1/2, -x+1/2'
+81 'x, y+1/2, -z'
+82 'x+1/2, -y, z'
+83 '-x, y, z+1/2'
+84 '-x+1/2, -y+1/2, -z+1/2'
+85 'z, -x, -y+1/2'
+86 '-z, -x+1/2, y'
+87 '-z+1/2, x, -y'
+88 'z+1/2, x+1/2, y+1/2'
+89 '-y+1/2, z, -x'
+90 'y, -z, -x+1/2'
+91 '-y, -z+1/2, x'
+92 'y+1/2, z+1/2, x+1/2'
+93 '-x, -y+1/2, z'
+94 '-x+1/2, y, -z'
+95 'x, -y, -z+1/2'
+96 'x+1/2, y+1/2, z+1/2'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+La1 La3+ 0.125 0 0.25
+Zr1 Zr4+ 0 0 0
+O1 O2- 0.96837 0.0538 0.1501
+Li1 Li1+ 0.375 0 0.25
+Li2 Li1+ 0.0959 0.6922 0.5731
+
+#End of data_422259-ICSD
+
+#CHGnet structure optimisation
+#FIRE:  500 11:44:44    -1493.270142        0.370136
+#CHGNet relaxed structure Full Formula (Li120 La24 Zr16 O96)
+#Reduced Formula: Li15La3Zr2O12
+#abc   :  14.683017  14.701982  14.648250
+#angles:  90.060732  89.983252  89.821963
+#pbc   :       True       True       True
+
+#Orb-v3-inf-conservative-omat structure optimisation
+#Optimized Energy: -1361.8909912109375
+#Lattice parameters (abc): [12.9827 12.9827 12.9827] Å
+#Lattice angles (alpha, beta, gamma): [90. 90. 90.] degrees
+
+
