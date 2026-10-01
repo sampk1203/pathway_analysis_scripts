@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 
 KB_EV = 8.617333262e-5  # eV/K
+TILT_TOL = 0.05        # A: triclinic tilt is always ignored; a warning says 'LARGE' above this
 
 MASSES = {  # amu; extend if you use other dopants
     "Li": 6.94, "La": 138.905, "Zr": 91.224, "O": 15.999, "Ga": 69.723,
@@ -237,6 +238,7 @@ class Trajectory:
 def read_dump(path: str) -> Trajectory:
     steps, Ls, frames = [], [], []
     types = ids0 = lo0 = None
+    tri_max = -1.0                       # largest |tilt| seen (triclinic dumps only)
     with open(path) as f:
         while True:
             line = f.readline()
@@ -248,11 +250,17 @@ def read_dump(path: str) -> Trajectory:
             f.readline()                      # ITEM: NUMBER OF ATOMS
             n = int(f.readline())
             hdr = f.readline()                # ITEM: BOX BOUNDS ...
-            if "xy" in hdr:
-                raise NotImplementedError("triclinic boxes are not supported (NVT LLZO box should be orthogonal)")
             b = [f.readline().split() for _ in range(3)]
             lo = np.array([float(x[0]) for x in b])
             hi = np.array([float(x[1]) for x in b])
+            if "xy" in hdr:                   # triclinic header: 3rd column = tilt xy xz yz. Tilt is IGNORED (box treated as orthogonal)
+                xy, xz, yz = tilt = [float(x[2]) for x in b]
+                tri_max = max(tri_max, max(abs(t) for t in tilt))
+                # dump bounds are the bounding box of the tilted cell: remove the tilt extent to get the true box edges
+                ex = [min(0.0, xy, xz, xy + xz), max(0.0, xy, xz, xy + xz)]
+                ey = [min(0.0, yz), max(0.0, yz)]
+                lo = lo - np.array([ex[0], ey[0], 0.0])
+                hi = hi - np.array([ex[1], ey[1], 0.0])
             cols = f.readline().split()[2:]
             lines = [f.readline() for _ in range(n)]
             if not lines or not lines[-1].strip():
@@ -276,6 +284,9 @@ def read_dump(path: str) -> Trajectory:
             Ls.append(hi - lo)
     if not frames:
         raise ValueError(f"{path}: no frames read")
+    if tri_max >= 0:
+        warnings.warn(f"{path}: triclinic dump header, max |tilt| = {tri_max:.4f} A: tilt IGNORED, box treated as orthogonal"
+                      + (f"  [LARGE: > {TILT_TOL} A, distances near the box edge are off by up to this much]" if tri_max > TILT_TOL else ""))
     steps = np.array(steps)
     return Trajectory(steps=steps, time_ps=np.zeros(len(steps)), lo=lo0, L=np.array(Ls),
                       types=types, ids=ids0, pos=np.array(frames))
