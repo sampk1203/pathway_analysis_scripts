@@ -838,7 +838,8 @@ def main():
         win = int(round(args.tc / dt))
         cs = concerted_stats(ev, F, win, near, ev_shell, args.nshuf, args.seed, nshell=len(shell_names))
         if cs:
-            row.update({k: v for k, v in cs.items() if k not in ("shell_conc", "shell_conc_ctrl", "cluster_hist", "n")})
+            row.update({k: v for k, v in cs.items() if k not in ("shell_conc", "shell_conc_ctrl", "cluster_hist", "n", "shell_conc_ctrl_sd", "shell_refill",
+                                                       "shell_refill_ctrl", "shell_refill_ctrl_sd", "shell_n")})
             ch = cs["cluster_hist"]
             row.update(clusters_2=ch.get(2, 0), clusters_3=ch.get(3, 0), clusters_4=ch.get(4, 0),
                        clusters_5plus=sum(v for k, v in ch.items() if k >= 5))
