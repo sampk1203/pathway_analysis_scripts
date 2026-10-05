@@ -498,6 +498,7 @@ def plot_obs_vs_chance(path, rows, shell_names, kind, title, ylabel, name, note,
     K = len(shell_names)
     x = np.arange(K)
     fig, axs = plt.subplots(2, len(Ts), figsize=(2.9 * len(Ts) + 0.8, 6.2), dpi=150, squeeze=False, sharex=False, sharey="row")
+    top_hi, z_all = [], [-3.0, 3.0]          # data extents over ALL temperatures -> common y-limits set after the loop
     for ci, T in enumerate(Ts):
         rr = {r["shell"]: r for r in rows if r["T"] == T}
         a = axs[0][ci]
@@ -512,10 +513,11 @@ def plot_obs_vs_chance(path, rows, shell_names, kind, title, ylabel, name, note,
         if lo.any():
             a.plot(x[lo] - 0.07, o[lo], "o", mfc="white", mec="C3", ms=8, zorder=6, ls="", label=f"< {few} hops in the shell")
         a.set_title(f"T = {T} K", fontsize=10)
-        a.set_ylim(bottom=0)
+        top_hi += [np.nanmax(v) for v in (o + np.nan_to_num(se), c + np.nan_to_num(sd)) if np.isfinite(v).any()]
         a.set_xticks(x)
         a.set_xticklabels(shell_names, fontsize=7)
         z = np.array([rr[n][f"{kind}_z"] if n in rr else np.nan for n in shell_names])
+        z_all += [v for v in z if np.isfinite(v)]
         b = axs[1][ci]
         b.bar(x, np.nan_to_num(z), color=["0.75" if (not np.isfinite(zz) or abs(zz) < 3) else "C3" for zz in z], width=0.6)
         for yy in (-3, 3):
@@ -526,6 +528,12 @@ def plot_obs_vs_chance(path, rows, shell_names, kind, title, ylabel, name, note,
         if ci == 0:
             a.set_ylabel(ylabel, fontsize=9)
             b.set_ylabel("z = (obs - chance)/sd", fontsize=9)
+    # rows are sharey: one call per row sets the limits of every column = largest extent over all T, so no point is clipped
+    hi_ = max(top_hi) if top_hi else 1.0
+    axs[0][0].set_ylim(0, (hi_ if hi_ > 0 else 1.0) * 1.08)
+    zl, zh = min(z_all), max(z_all)
+    zp = 0.08 * (zh - zl)
+    axs[1][0].set_ylim(zl - zp, zh + zp)
     h, l = axs[0][0].get_legend_handles_labels()
     for a_ in axs[0]:
         hh, ll = a_.get_legend_handles_labels()
