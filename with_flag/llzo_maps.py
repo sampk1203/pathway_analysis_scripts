@@ -10,6 +10,8 @@ llzo_maps.py - shared numerical helpers for 01_density_free_energy.py and 02_com
 import warnings
 
 import numpy as np
+
+import llzo_svg  # noqa: F401  (every saved .png also gets an editable .svg)
 from scipy.ndimage import gaussian_filter, map_coordinates
 
 PANELS = [(2, "x", "y", 0, 1), (1, "x", "z", 0, 2), (0, "y", "z", 1, 2)]   # (collapsed axis, xlabel, ylabel, ix, iy)

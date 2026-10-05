@@ -237,7 +237,7 @@ def refill_flags(f, li, a, b, win):
     return out
 
 
-def concerted_stats(ev, F, win, near, shell_of_event, nshuf, seed):
+def concerted_stats(ev, F, win, near, shell_of_event, nshuf, seed, nshell=None):
     f, li, a, b = ev["f"], ev["li"], ev["a"], ev["b"]
     n = len(f)
     res = dict(n=n)
@@ -247,8 +247,8 @@ def concerted_stats(ev, F, win, near, shell_of_event, nshuf, seed):
     ref = refill_flags(f, li, a, b, win)
     rng = np.random.default_rng(seed)
     N = int(li.max()) + 1
-    fc, fr, sh, mx = [], [], [], []
-    nsh = int(shell_of_event.max()) + 1
+    fc, fr, sh, mx, shr = [], [], [], [], []
+    nsh = max(int(shell_of_event.max()) + 1, nshell or 0)
     for _ in range(nshuf):
         off = rng.integers(0, F, N)
         fs = (f + off[li]) % F
@@ -258,7 +258,8 @@ def concerted_stats(ev, F, win, near, shell_of_event, nshuf, seed):
         fr.append(rf.mean())
         mx.append(sz.max())
         sh.append([(sz[shell_of_event == k] >= 2).mean() if (shell_of_event == k).any() else np.nan for k in range(nsh)])
-    fc, fr, sh = np.array(fc), np.array(fr), np.array(sh)
+        shr.append([rf[shell_of_event == k].mean() if (shell_of_event == k).any() else np.nan for k in range(nsh)])
+    fc, fr, sh, shr = np.array(fc), np.array(fr), np.array(sh), np.array(shr)
     fo = float((size >= 2).mean())
     ro = float(ref.mean())
     res.update(f_conc=fo, f_conc_ctrl=float(fc.mean()), f_conc_ctrl_sd=float(fc.std(ddof=1)),
@@ -268,7 +269,17 @@ def concerted_stats(ev, F, win, near, shell_of_event, nshuf, seed):
                shell_conc=[float((size[shell_of_event == k] >= 2).mean()) if (shell_of_event == k).any() else np.nan
                            for k in range(nsh)],
                shell_conc_ctrl=[float(np.nanmean(sh[:, k])) if np.isfinite(sh[:, k]).any() else np.nan
-                                for k in range(nsh)])
+                                for k in range(nsh)],
+               # per-shell concerted sd of chance, refill observed / chance / sd of chance, hops per shell
+               shell_conc_ctrl_sd=[float(np.nanstd(sh[:, k], ddof=1)) if np.isfinite(sh[:, k]).sum() > 2 else np.nan
+                                   for k in range(nsh)],
+               shell_refill=[float(ref[shell_of_event == k].mean()) if (shell_of_event == k).any() else np.nan
+                             for k in range(nsh)],
+               shell_refill_ctrl=[float(np.nanmean(shr[:, k])) if np.isfinite(shr[:, k]).any() else np.nan
+                                  for k in range(nsh)],
+               shell_refill_ctrl_sd=[float(np.nanstd(shr[:, k], ddof=1)) if np.isfinite(shr[:, k]).sum() > 2 else np.nan
+                                     for k in range(nsh)],
+               shell_n=[int((shell_of_event == k).sum()) for k in range(nsh)])
     res["conc_excess_norm"] = (fo - res["f_conc_ctrl"]) / (1.0 - res["f_conc_ctrl"]) if res["f_conc_ctrl"] < 1 else np.nan
     res["z_conc"] = (fo - res["f_conc_ctrl"]) / res["f_conc_ctrl_sd"] if res["f_conc_ctrl_sd"] > 0 else np.nan
     res["z_refill"] = (ro - res["refill_ctrl"]) / res["refill_ctrl_sd"] if res["refill_ctrl_sd"] > 0 else np.nan
@@ -475,6 +486,59 @@ def plot_network(path, sites, Lm, occ, nmat, dops, T, title, kinds=None, center=
     plt.close(fig)
 
 
+def plot_obs_vs_chance(path, rows, shell_names, kind, title, ylabel, name, note, few=20):
+    """NEW figure: one column per temperature, x = distance shell. Top row: observed fraction (filled, +/- binomial SE)
+    vs chance (grey open squares, +/- sd of the shuffles = every Li's hop times circularly shifted). Bottom row:
+    z = (observed - chance) / sd(chance); the dashed lines mark +/-3 (inside = noise). Open red circles = fewer than
+    `few` hops in that shell (observed value unreliable)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    Ts = sorted({r["T"] for r in rows})
+    K = len(shell_names)
+    x = np.arange(K)
+    fig, axs = plt.subplots(2, len(Ts), figsize=(2.9 * len(Ts) + 0.8, 6.2), dpi=150, squeeze=False, sharex=False, sharey="row")
+    for ci, T in enumerate(Ts):
+        rr = {r["shell"]: r for r in rows if r["T"] == T}
+        a = axs[0][ci]
+        o = np.array([rr[n][f"{kind}_obs"] if n in rr else np.nan for n in shell_names])
+        se = np.array([rr[n][f"{kind}_obs_binom_se"] if n in rr else np.nan for n in shell_names])
+        c = np.array([rr[n][f"{kind}_chance"] if n in rr else np.nan for n in shell_names])
+        sd = np.array([rr[n][f"{kind}_chance_sd"] if n in rr else np.nan for n in shell_names])
+        nh = np.array([rr[n]["n_hops"] if n in rr else 0 for n in shell_names])
+        a.errorbar(x - 0.07, o, se, fmt="o", color="C3", capsize=2, label="observed (+/- binomial SE)")
+        a.errorbar(x + 0.07, c, sd, fmt="s", mfc="white", color="0.35", capsize=2, label="chance (shuffled hop times, +/- sd)")
+        lo = nh < few
+        if lo.any():
+            a.plot(x[lo] - 0.07, o[lo], "o", mfc="white", mec="C3", ms=8, zorder=6, ls="", label=f"< {few} hops in the shell")
+        a.set_title(f"T = {T} K", fontsize=10)
+        a.set_ylim(bottom=0)
+        a.set_xticks(x)
+        a.set_xticklabels(shell_names, fontsize=7)
+        z = np.array([rr[n][f"{kind}_z"] if n in rr else np.nan for n in shell_names])
+        b = axs[1][ci]
+        b.bar(x, np.nan_to_num(z), color=["0.75" if (not np.isfinite(zz) or abs(zz) < 3) else "C3" for zz in z], width=0.6)
+        for yy in (-3, 3):
+            b.axhline(yy, color="0.4", ls="--", lw=0.8)
+        b.axhline(0, color="0.5", lw=0.8)
+        b.set_xticks(x)
+        b.set_xticklabels([f"{n_}\n(n={k_})" for n_, k_ in zip(shell_names, nh)], fontsize=7)
+        if ci == 0:
+            a.set_ylabel(ylabel, fontsize=9)
+            b.set_ylabel("z = (obs - chance)/sd", fontsize=9)
+    h, l = axs[0][0].get_legend_handles_labels()
+    for a_ in axs[0]:
+        hh, ll = a_.get_legend_handles_labels()
+        if len(hh) > len(h):
+            h, l = hh, ll
+    fig.legend(h, l, loc="lower center", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.035))
+    fig.suptitle(f"{name}: {title} vs chance, per distance shell\n({note}).  Grey bars: |z| < 3 = not distinguishable from independent Li", fontsize=9)
+    fig.text(0.5, 0.008, "shell = distance of the vacated site to the nearest dopant;  n = hops that left a site in that shell", ha="center", fontsize=7)
+    fig.tight_layout(rect=(0, 0.10, 1, 0.92))
+    fig.savefig(path)
+    plt.close(fig)
+
+
 def plot_summary(path, rows, shell_rows, shell_names, name):
     import matplotlib
     matplotlib.use("Agg")
@@ -621,6 +685,7 @@ def main():
         shell_names = ["all"]
 
     summary_rows, shell_rows, site_table = [], [], None
+    conc_shell_rows = []                          # per (T, shell): concerted + refill, observed vs chance
     net_jobs = []
     barrier_note = None
     for T in temps:
@@ -771,7 +836,7 @@ def main():
 
         # concerted
         win = int(round(args.tc / dt))
-        cs = concerted_stats(ev, F, win, near, ev_shell, args.nshuf, args.seed)
+        cs = concerted_stats(ev, F, win, near, ev_shell, args.nshuf, args.seed, nshell=len(shell_names))
         if cs:
             row.update({k: v for k, v in cs.items() if k not in ("shell_conc", "shell_conc_ctrl", "cluster_hist", "n")})
             ch = cs["cluster_hist"]
@@ -796,7 +861,19 @@ def main():
             if len(shell_names) > 1:
                 for k, sn in enumerate(shell_names):
                     print(f"    shell {sn:>8}: concerted {100 * cs['shell_conc'][k]:.1f} % (chance {100 * cs['shell_conc_ctrl'][k]:.1f} %)"
+                          f"   refill {100 * cs['shell_refill'][k]:.1f} % (chance {100 * cs['shell_refill_ctrl'][k]:.1f} %)"
                           f"   n_hops = {int((ev_shell == k).sum())}")
+            for k, sn in enumerate(shell_names):
+                nk = cs["shell_n"][k]
+                row_c = dict(T=T, shell=sn, n_hops=nk)
+                for tag_, o_, c_, s_ in (("conc", cs["shell_conc"][k], cs["shell_conc_ctrl"][k], cs["shell_conc_ctrl_sd"][k]),
+                                         ("refill", cs["shell_refill"][k], cs["shell_refill_ctrl"][k], cs["shell_refill_ctrl_sd"][k])):
+                    row_c.update({f"{tag_}_obs": o_, f"{tag_}_obs_binom_se": float(np.sqrt(o_ * (1 - o_) / nk)) if nk > 0 and np.isfinite(o_) else np.nan,
+                                  f"{tag_}_chance": c_, f"{tag_}_chance_sd": s_, f"{tag_}_excess": o_ - c_,
+                                  f"{tag_}_excess_norm": (o_ - c_) / (1 - c_) if np.isfinite(c_) and c_ < 1 else np.nan,
+                                  f"{tag_}_obs_over_chance": o_ / c_ if np.isfinite(c_) and c_ > 0 else np.nan,
+                                  f"{tag_}_z": (o_ - c_) / s_ if np.isfinite(s_) and s_ > 0 else np.nan})
+                conc_shell_rows.append(row_c)
         summary_rows.append(row)
 
         # barriers
@@ -896,6 +973,18 @@ def main():
         w.writeheader()
         w.writerows(summary_rows)
     shell_out = io.write_hop_shell_outputs(shell_rows, shell_names, outdir, cfg["name"])
+    if conc_shell_rows:
+        with open(os.path.join(outdir, "concerted_shell_stats.csv"), "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(conc_shell_rows[0].keys()))
+            w.writeheader()
+            w.writerows(conc_shell_rows)
+        shell_out.append("concerted_shell_stats.csv")
+        for kind_, ttl_, yl_ in (("conc", "concerted hops", "fraction concerted"),
+                                 ("refill", "refill (knock-on)", "fraction refilled")):
+            fn_ = ("concerted" if kind_ == "conc" else kind_) + "_vs_chance_shell.png"
+            plot_obs_vs_chance(os.path.join(outdir, fn_), conc_shell_rows, shell_names, kind_, ttl_, yl_, cfg["name"],
+                               f"tc = {args.tc:g} ps, rc = {args.rc:g} A, {args.nshuf} shuffles")
+            shell_out.append(fn_)
     with open(os.path.join(outdir, "sites.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["site", "frac_x", "frac_y", "frac_z", "dist_to_nearest_dopant_A", "shell", "kind"])

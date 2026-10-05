@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# run_pipeline.sh - run 01, 02, 03, 04 (crystal sites), 05, 06 (Li-O ECoN) and 07 (hop loops / net hops) on one or more MD folders.
+# run_pipeline.sh - run 01, 02, 03, 04 (crystal sites), 05, 06 (Li-O ECoN), 07 (hop loops / net hops) and 08 (Li phonon band centre) on one or more MD folders.
 # usage:  bash run_pipeline.sh /path/to/MD_run_A [/path/to/MD_run_B ...]
 # Each folder needs the dumps + element_list (+ analysis_defaults.yaml if you use one).
 # Outputs in each folder:  results/<system>/  (01, 02, 03)   hops_cif/<system>/  (04)   msd05/<system>/  (05)
-#                          econ06/<system>/  (06)   loops07/  (07)   logs 01.log ... 07.log
+#                          econ06/<system>/  (06)   loops07/  (07)   phonon08/<system>/  (08)   logs 01.log ... 08.log
 # SENS=1 bash run_pipeline.sh <folders>   : 07 sensitivity only (needs a finished normal run: hops_cif/). Outputs:
 #   loops07_ml4/ (--maxloop 4)   loops07_ml16/ (--maxloop 16)   loops07_s07/ (--small 0.7 A)   loops07_s15/ (--small 1.5 A)
 #   compare NET/far and ROBUST/far with loops07/ (default --maxloop 8, --small 1.0)
@@ -24,7 +24,7 @@
 # A failing normal step stops that system (each step has || exit 1; set -e alone is ignored here) and the script goes on to the next folder.
 # A failing sweep item is logged to sweep_failed.txt and the sweeps go on.
 BASE=/media/sampk/350GB/1_qpivolta/1_Doped_cLLZO
-S=$BASE/pathway_analysis_scripts
+S=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CIF=$BASE/cubic_LLZO_wyckoff.cif
 
 [ $# -ge 1 ] || { echo "usage: bash run_pipeline.sh /path/to/MD_run [more folders]"; exit 1; }
@@ -356,12 +356,14 @@ for d in "$@"; do
     python "$S/01_density_free_energy.py" . --center all --sigma 0.5 --sigma-min 0.2 --sigma-max 0.6 | tee 01.log || exit 1
     python "$S/02_compare_temps.py" "results/$name" --center all | tee 02.log || exit 1
     python "$S/03_van_hove_haven.py" . | tee 03.log || exit 1
-    mkdir -p hops_cif msd05 econ06 loops07
+    mkdir -p hops_cif msd05 econ06 loops07 phonon08
     python "$S/04_sites_hops.py" . --sites-cif "$CIF" --merge-pairs 1.0 --nshuf 200 --results results --outdir hops_cif \
       --net-center all --net-slab 2 --net-window 9 | tee 04.log || exit 1
     python "$S/05_msd_by_shell.py" . --lags 1 5 10 --outdir msd05 | tee 05.log || exit 1
     python "$S/06_li_econ.py" . --hops-dir "hops_cif/$name" --outdir econ06 | tee 06.log || exit 1
     python "$S/07_hop_loops.py" . --hops-dir "hops_cif/$name" --outdir loops07 | tee 07.log || exit 1
+    # 08 needs dump spacing <= 10 fs (it stops itself otherwise): not fatal, the sweeps still run
+    python "$S/08_phonon_band_center.py" . --outdir phonon08 | tee 08.log || echo "!!!! 08 failed (dump spacing too large? see 08.log)"
     [ "$NOSWEEP" = 1 ] || param_sweep
   ) || echo "!!!! failed in $d (see the last output above)"
 done

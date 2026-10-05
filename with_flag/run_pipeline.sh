@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# run_pipeline.sh - run 01, 02, 03, 04 (crystal sites), 05, 06 (Li-O ECoN) and 07 (hop loops / net hops) on one or more MD folders.
+# run_pipeline.sh - run 01, 02, 03, 04 (crystal sites), 05, 06 (Li-O ECoN), 07 (hop loops / net hops), 09 (Haven ratio per shell) and 08 (Li phonon band centre) on one or more MD folders.
 # usage:  bash run_pipeline.sh [flags] /path/to/MD_run_A [/path/to/MD_run_B ...]
 # Each folder needs the dumps + element_list (+ analysis_defaults.yaml if you use one) UNLESS given by flags. Flags (before the folders,
-# same for every folder given; each overrides the file/default and is passed to 01 03 04 05 06 07 incl. all sweeps):
+# same for every folder given; each overrides the file/default and is passed to 01 03 04 05 06 07 08 incl. all sweeps):
 #   --dump-dir D         dumps live in D (absolute, or relative to each run folder)
 #   --prefix P / --dump-pattern 'dump_{prefix}_{T}K.lammpstrj'   dump file naming
 #   --elements "Li La Zr Ga Ru O"   element of LAMMPS atom type 1..N (replaces element_list)
@@ -10,10 +10,12 @@
 #   --dopants "Ga Ru"    dopant elements (default: everything not Li La Zr O)
 #   --fold "NX NY NZ"    supercell, conventional cells along a b c, e.g. "1 1 2" (default: from the box)
 #   --name N             system name for results/<N>, hops_cif/<N> ... (default: run folder name)
-#   --scripts DIR        folder with 01-07 + llzo_*.py (default: the folder this script is in)
+#   --scripts DIR        folder with 01-08 + llzo_*.py (default: the folder this script is in)
 #   --cif FILE           Li-site CIF for 04 (default below)
 # Outputs in each folder:  results/<system>/  (01, 02, 03)   hops_cif/<system>/  (04)   msd05/<system>/  (05)
-#                          econ06/<system>/  (06)   loops07/  (07)   logs 01.log ... 07.log
+#                          econ06/<system>/  (06)   loops07/  (07)   phonon08/<system>/  (08)   logs 01.log ... 08.log
+#   New: haven09/<system>/ (09: haven_shell.csv/.png, Haven ratio per shell 0-3/3-5/5-7/>7 A) and, in hops_cif/<system>/ (04), concerted_shell_stats.csv,
+#   concerted_vs_chance_shell.png, refill_vs_chance_shell.png. EVERY .png is also saved as an editable .svg (Inkscape); LLZO_SVG=0 switches that off.
 # SENS=1 bash run_pipeline.sh <folders>   : 07 sensitivity only (needs a finished normal run: hops_cif/). Outputs:
 #   loops07_ml4/ (--maxloop 4)   loops07_ml16/ (--maxloop 16)   loops07_s07/ (--small 0.7 A)   loops07_s15/ (--small 1.5 A)
 #   compare NET/far and ROBUST/far with loops07/ (default --maxloop 8, --small 1.0)
@@ -383,12 +385,16 @@ for d in "$@"; do
     python "$S/01_density_free_energy.py" . "${CFG[@]}" --center all --sigma 0.5 --sigma-min 0.2 --sigma-max 0.6 | tee 01.log || exit 1
     python "$S/02_compare_temps.py" "results/$name" --center all | tee 02.log || exit 1
     python "$S/03_van_hove_haven.py" . "${CFG[@]}" | tee 03.log || exit 1
-    mkdir -p hops_cif msd05 econ06 loops07
+    mkdir -p hops_cif msd05 econ06 loops07 phonon08 haven09
     python "$S/04_sites_hops.py" . "${CFG[@]}" --sites-cif "$CIF" --merge-pairs 1.0 --nshuf 200 --results results --outdir hops_cif \
       --net-center all --net-slab 2 --net-window 9 | tee 04.log || exit 1
     python "$S/05_msd_by_shell.py" . "${CFG[@]}" --lags 1 5 10 --outdir msd05 | tee 05.log || exit 1
     python "$S/06_li_econ.py" . "${CFG[@]}" --hops-dir "hops_cif/$name" --outdir econ06 | tee 06.log || exit 1
     python "$S/07_hop_loops.py" . "${CFG[@]}" --hops-dir "hops_cif/$name" --outdir loops07 | tee 07.log || exit 1
+    # 09: Haven ratio per distance shell (dumps only; not fatal, the rest still runs)
+    python "$S/09_shell_haven.py" . "${CFG[@]}" --outdir haven09 | tee 09.log || echo "!!!! 09 failed (see 09.log)"
+    # 08 needs dump spacing <= 10 fs (it stops itself otherwise): not fatal, the sweeps still run
+    python "$S/08_phonon_band_center.py" . "${CFG[@]}" --outdir phonon08 | tee 08.log || echo "!!!! 08 failed (dump spacing too large? see 08.log)"
     [ "$NOSWEEP" = 1 ] || param_sweep
   ) || echo "!!!! failed in $d (see the last output above)"
 done

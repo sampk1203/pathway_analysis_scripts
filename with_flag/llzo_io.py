@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import llzo_svg  # noqa: F401  (every saved .png also gets an editable .svg)
+
 KB_EV = 8.617333262e-5  # eV/K
 TILT_TOL = 0.05        # A: triclinic tilt is always ignored; a warning says 'LARGE' above this
 
