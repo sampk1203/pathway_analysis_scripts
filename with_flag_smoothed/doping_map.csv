@@ -1,0 +1,17 @@
+folder,dopant,q,x,n_dopant,n_fu
+pure,none,0,0,0,16
+1Al-doped,Al,3,0.0625,1,16
+2Al-doped,Al,3,0.125,2,16
+3Al-doped,Al,3,0.1875,3,16
+1Ga-doped,Ga,3,0.0625,1,16
+2Ga-doped,Ga,3,0.125,2,16
+3Ga-doped,Ga,3,0.1875,3,16
+1Fe-doped,Fe,3,0.0625,1,16
+2Fe-doped,Fe,3,0.125,2,16
+3Fe-doped,Fe,3,0.1875,3,16
+1Mg-doped,Mg,2,0.0625,1,16
+2Mg-doped,Mg,2,0.125,2,16
+3Mg-doped,Mg,2,0.1875,3,16
+1Zn-doped,Zn,2,0.0625,1,16
+2Zn-doped,Zn,2,0.125,2,16
+3Zn-doped,Zn,2,0.1875,3,16

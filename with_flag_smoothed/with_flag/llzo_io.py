@@ -212,6 +212,10 @@ def temperatures(cfg: dict) -> list[int]:
         m = re.search(r"_(\d+)K\.lammpstrj$", os.path.basename(p))
         if m:
             found.add(int(m.group(1)))
+    for d in glob.glob(os.path.join(cfg["dump_dir"], "MD-*")):          # layout <folder>/MD-<T>/*.lammpstrj
+        t = os.path.basename(d)[3:]
+        if t.isdigit() and glob.glob(os.path.join(d, "*.lammpstrj")):
+            found.add(int(t))
     if not found:
         sys.exit(f"no dumps found in {cfg['dump_dir']} (pattern {pat!r}, or *_<T>K.lammpstrj)")
     return sorted(found)
@@ -221,6 +225,9 @@ def dump_path(cfg: dict, T) -> str:
     p = os.path.join(cfg["dump_dir"], cfg["dump_pattern"].format(prefix=cfg["prefix"], T=T))
     if os.path.exists(p):
         return p
+    md = sorted(glob.glob(os.path.join(cfg["dump_dir"], f"MD-{T}", "*.lammpstrj")))      # layout <folder>/MD-<T>/*.lammpstrj
+    if md:
+        return ([h for h in md if f"{T}K" in os.path.basename(h)] or md)[0]
     hits = glob.glob(os.path.join(cfg["dump_dir"], f"*_{T}K.lammpstrj"))
     if len(hits) == 1:
         return hits[0]

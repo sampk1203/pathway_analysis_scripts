@@ -2,6 +2,7 @@
 """whole_msd.py - MSD of ALL Li (no shells, no dopant needed), per folder, T and tau. Works on the pure folder too.
 
 python whole_msd.py {pure 1Al-doped 2Al-doped 3Al-doped} {1Ga-doped 2Ga-doped} --T 800 900 --lags 1 5 10
+python whole_msd.py {pure 1Al-doped} --tmin 100 --tmax 200      (window 100-200 ps)
 python whole_msd.py --selftest
 
 Groups use the build_doc.py syntax. Tokens like Al=Li24d are accepted and ignored; elements=Li,La,Zr,Al,O sets the element of
@@ -17,7 +18,7 @@ MSD at one tau is not D: the printout gives the log-log slope over the taus (abo
 Equals MSD_all if Li move independently; collective/MSD_all = D_sigma/D* = 1/H_R in the long-time limit. Noisy: one sample per time origin.
 
 Output: <outdir>/<system>/whole_msd.csv   (default outdir = whole_msd in the current directory; <system> = folder name or --name)
-    T, tau_ps, n_Li, msd_A2, msd_se, blocks, n_dopant, n_fu, [msd_coll_A2, msd_coll_se]
+    T, tau_ps, n_Li, msd_A2, msd_se, blocks, n_dopant, n_fu, t_start_ps, t_end_ps, [msd_coll_A2, msd_coll_se]
 n_dopant = atoms of the dopant types; n_fu = La atoms / 3 (formula units in the cell, NaN if no La); both read from the dump, for the
 n_dopant / n_fu = x check in doping_model.py.
 Cache: <outdir>/<system>/cache/whole_msd_T<T>K.json (key = lags, blocks, tmin, dump file + mtime, settings); --recompute ignores it.
@@ -128,9 +129,13 @@ def whole_msd(li, lag_frames, nb, collective=False):
     return out
 
 
-def compute(folder, cfg, T, tmin, lags_ps, nb, collective):
+def compute(folder, cfg, T, tmin, tmax, lags_ps, nb, collective):
     dump = md_dump(folder, T) or lio.dump_path(cfg, T)
     traj = lio.prepare(cfg, dump, tmin, verbose=False)
+    if tmax is not None:                                              # window = tmin .. tmax (ps after MD start)
+        k = traj.time_ps <= tmax + 1e-9
+        if k.sum() < 10: raise ValueError(f'only {int(k.sum())} frames with t <= {tmax} ps')
+        traj = lio.Trajectory(steps=traj.steps[k], time_ps=traj.time_ps[k], lo=traj.lo, L=traj.L[k], types=traj.types, ids=traj.ids, pos=traj.pos[k])
     drift = lio.framework_drift(cfg, traj)
     lm = lio.li_mask(cfg, traj)
     li = traj.pos[:, lm, :] - drift[:, None, :]
@@ -146,21 +151,22 @@ def compute(folder, cfg, T, tmin, lags_ps, nb, collective):
         if r is None:
             warn(f'{fname(folder)} T={T}: tau = {lag * dt:g} ps needs more than {nb} origin blocks of frames (F = {li.shape[0]}): skipped')
             continue
-        row = dict(T=int(T), tau_ps=lag * dt, n_Li=int(li.shape[1]), msd_A2=r['msd'], msd_se=r['se'], blocks=nb, n_dopant=n_dop, n_fu=n_fu)
+        row = dict(T=int(T), tau_ps=lag * dt, n_Li=int(li.shape[1]), msd_A2=r['msd'], msd_se=r['se'], blocks=nb, n_dopant=n_dop, n_fu=n_fu,
+                   t_start_ps=float(traj.time_ps[0]), t_end_ps=float(traj.time_ps[-1]))
         if collective: row.update(msd_coll_A2=r['coll'], msd_coll_se=r['coll_se'])
         rows.append(row)
     return rows
 
 
-def cache_key(cfg, dump, tmin, lags, nb, collective):
-    return repr((tuple(lags), nb, tmin, collective, dump, os.path.getmtime(dump), cfg.get('run_steps'), cfg.get('dt_ps'), cfg.get('tmin_ps'),
+def cache_key(cfg, dump, tmin, tmax, lags, nb, collective):
+    return repr((tuple(lags), nb, tmin, tmax, collective, dump, os.path.getmtime(dump), cfg.get('run_steps'), cfg.get('dt_ps'), cfg.get('tmin_ps'),
                  tuple(sorted(cfg['types'].items())), tuple(cfg['dopant_types']), VERSION))
 
 
 def _task(a):
-    folder, cfg, T, tmin, lags, nb, coll, outp, key = a
+    folder, cfg, T, tmin, tmax, lags, nb, coll, outp, key = a
     try:
-        rows = compute(folder, cfg, T, tmin, lags, nb, coll)
+        rows = compute(folder, cfg, T, tmin, tmax, lags, nb, coll)
         os.makedirs(os.path.dirname(outp), exist_ok=True)
         with open(outp, 'w') as fh: json.dump(dict(key=key, rows=rows), fh)
     except (Exception, SystemExit) as e:
@@ -185,14 +191,14 @@ def run(groups, a):
                 try: dump = md_dump(f, T) or lio.dump_path(cfg, T)
                 except SystemExit as e:
                     warn(f'{f} T={T}: {e}'); continue
-                key = cache_key(cfg, dump, a.tmin, a.lags, a.blocks, a.collective)
+                key = cache_key(cfg, dump, a.tmin, a.tmax, a.lags, a.blocks, a.collective)
                 outp = os.path.join(odir, 'cache', f'whole_msd_T{T}K.json')
                 plan.setdefault((f, cfg['name']), []).append(outp)
                 ok = False
                 if os.path.exists(outp) and not a.recompute:
                     try: ok = json.load(open(outp))['key'] == key
                     except Exception: ok = False
-                if not ok: todo.append((f, cfg, T, a.tmin, a.lags, a.blocks, a.collective, outp, key))
+                if not ok: todo.append((f, cfg, T, a.tmin, a.tmax, a.lags, a.blocks, a.collective, outp, key))
     print(f'[whole_msd] {len(todo)} (folder, T) to compute, {sum(len(v) for v in plan.values()) - len(todo)} cached')
     if a.jobs > 1 and len(todo) > 1:
         from concurrent.futures import ProcessPoolExecutor
@@ -219,7 +225,7 @@ def run(groups, a):
 
 
 def report(name, rows, collective):
-    print(f'\n=== {name} ===   n_Li = {rows[0]["n_Li"]}  n_dopant = {rows[0]["n_dopant"]}  n_fu = {rows[0]["n_fu"]:g}')
+    print(f'\n=== {name} ===   n_Li = {rows[0]["n_Li"]}  n_dopant = {rows[0]["n_dopant"]}  n_fu = {rows[0]["n_fu"]:g}  window {min(r["t_start_ps"] for r in rows):g}-{max(r["t_end_ps"] for r in rows):g} ps')
     for T in sorted({r['T'] for r in rows}):
         rr = [r for r in rows if r['T'] == T]
         s = f'  T = {T} K   ' + '   '.join(f'tau {r["tau_ps"]:g} ps: {r["msd_A2"]:.3f} +/- {r["msd_se"]:.3f} A^2' for r in rr)
@@ -291,6 +297,7 @@ def build_parser():
     ap.add_argument('--scripts', help='folder with llzo_io.py (default: ./with_flag next to this file)')
     ap.add_argument('--T', type=int, nargs='*', help='temperatures (default: every MD-<T>/ dump, else all dumps found)')
     ap.add_argument('--tmin', type=float, help='analysis window start, ps (default: tmin_ps of the settings)')
+    ap.add_argument('--tmax', type=float, help='analysis window end, ps after MD start (default: end of the run); e.g. --tmin 100 --tmax 200')
     ap.add_argument('--lags', type=float, nargs='*', default=[1.0, 5.0, 10.0], help='tau values, ps (default as 05)')
     ap.add_argument('--blocks', type=int, default=lio.DEFAULT_BLOCKS, help='time blocks for the jackknife error bars')
     ap.add_argument('--outdir', default='whole_msd', help='output root; files go to <outdir>/<system>/')
