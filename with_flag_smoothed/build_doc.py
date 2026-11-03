@@ -2389,7 +2389,7 @@ def tex_tables(blocks):
     return L
 
 
-def write_tex(groups, sd, rm, outpath, tabs=None, rho=None, pool=None):
+def write_tex(groups, sd, rm, outpath, tabs=None, rho=None, pool=None, extra=None):
     """<out>.tex next to the report + figures1/ with every figure. Text around the figures is yours to add. Tables = the docx tables."""
     outdir = os.path.dirname(os.path.abspath(outpath))
     base = os.path.splitext(os.path.basename(outpath))[0]
@@ -2424,6 +2424,11 @@ def write_tex(groups, sd, rm, outpath, tabs=None, rho=None, pool=None):
     if pool:
         L += ['\\clearpage', '\\section*{Shell density vs MSD and $H_R$ (pooled over folders)}', '', tex_txt(pool['text']), '']
         for pth in pool['figs']: L += tex_blocks(fs, 'shellpool', [pth], False, 0.8)
+    for sec in (extra or []):
+        L += ['\\clearpage', f"\\section*{{{tex_txt(sec['title'])}}}", '']
+        if sec.get('text'): L += [tex_txt(sec['text']), '']
+        for pth in sec.get('figs', []): L += tex_blocks(fs, 'extra', [pth], False, 0.8)
+        if sec.get('head'): L += tex_simple_table(sec['head'], sec['rows'], sec.get('pt', 7))
     L.append('\\end{document}')
     tex = os.path.join(outdir, base + '.tex')
     with open(tex, 'w') as fh: fh.write('\n'.join(L) + '\n')
@@ -2451,7 +2456,7 @@ def make_tables(groups, sd, p, cm):
     return tabs
 
 
-def build_report(groups, sd, p, rm=None, tabs=None, rho=None, pool=None):
+def build_report(groups, sd, p, rm=None, tabs=None, rho=None, pool=None, extra=None):
     rm, tabs, rho = rm or {}, tabs or {}, rho or {}
     doc = Document()
     sec = doc.sections[0]
@@ -2473,11 +2478,70 @@ def build_report(groups, sd, p, rm=None, tabs=None, rho=None, pool=None):
         h.paragraph_format.page_break_before = True
         doc.add_paragraph(pool['text'])
         for pth in pool['figs']: add_images(doc, [pth], False, MAX_H - 3.0)
+    for sec in (extra or []):                                                    # carrier analysis, then the radius table LAST
+        h = doc.add_heading(sec['title'], 1)
+        h.paragraph_format.page_break_before = True
+        if sec.get('text'): doc.add_paragraph(sec['text'])
+        for pth in sec.get('figs', []): add_images(doc, [pth], False, MAX_H - 3.0)
+        if sec.get('head'): add_simple_table(doc, sec['head'], sec['rows'], sec.get('pt', 7))
     return doc
+
+
+# ---------------------------------------------------------------- extra report sections: carrier analysis + radius table (end of the report)
+def radius_sigmoid_table(csv_path, taus=None):
+    """radius_avg.py's table (sigmoid fits only, valid: A >= 0.1 and 0 < r95 <= r_max_used; one value per T x tau) -> (head, rows) or None."""
+    if not os.path.exists(csv_path): return None
+    import pandas as pd
+    d = pd.read_csv(csv_path)
+    d = d[d.level == 'element']
+    cap = d[d.model == 'free'][['name', 'T', 'tau_ps', 'r_max_used']]
+    s = d[d.model == 'sigmoid'].drop(columns='r_max_used').merge(cap, on=['name', 'T', 'tau_ps'])
+    s = s[(s.A >= 0.1) & (s.r95 > 0) & (s.r95 <= s.r_max_used)]
+    if taus:
+        keep = np.zeros(len(s), bool)
+        for t in taus: keep |= np.isclose(s.tau_ps, t, rtol=0.05)
+        s = s[keep]
+    if not len(s): return None
+    g = s.groupby('name')
+    f = lambda x: '-' if not np.isfinite(x) else f'{x:.2f}'
+    head = ['dopant', 'n (T x tau)', 'r95 mean (A)', 'r95 std', 'r95 median', 'r50 mean (A)', 'r50 std', 'r50 median', 'A mean', 'A std']
+    rows = []
+    for name in sorted(g.groups, key=nat):
+        x = g.get_group(name)
+        rows.append([name, str(len(x)), f(x.r95.mean()), f(x.r95.std()), f(x.r95.median()), f(x.r50.mean()), f(x.r50.std()), f(x.r50.median()),
+                     f(x.A.mean()), f(x.A.std())])
+    return head, rows
+
+
+def add_simple_table(doc, head, rows, pt=7):
+    t = doc.add_table(rows=1 + len(rows), cols=len(head))
+    t.style = 'Table Grid'; t.autofit = False
+    w0 = 2.6 if len(head) > 8 else 2.2
+    wid = [w0] + [(USABLE_W - w0) / (len(head) - 1)] * (len(head) - 1)
+    for row in t.rows:
+        for i, c in enumerate(row.cells): c.width = Cm(wid[i])
+    for i, h in enumerate(head): put(t.cell(0, i), h, pt, True)
+    repeat_header(t.rows[0])
+    for r, row in enumerate(rows):
+        for c, x in enumerate(row): put(t.cell(r + 1, c), x, pt)
+    doc.add_paragraph()
+
+
+def tex_simple_table(head, rows, pt=7):
+    nc = len(head)
+    w0 = 2.4 if nc > 8 else 2.2
+    wd = (USABLE_W - w0) / (nc - 1) - 0.17
+    col = lambda w: f'>{{\\centering\\arraybackslash}}p{{{w:.2f}cm}}|'
+    L = ['\\begingroup', f'\\fontsize{{{pt}}}{{{pt + 1.5}}}\\selectfont\\setlength{{\\tabcolsep}}{{2pt}}',
+         '\\begin{longtable}{|' + col(w0 - 0.17) + col(wd) * (nc - 1) + '}', '\\hline',
+         ' & '.join(f'\\textbf{{{tex_txt(h)}}}' for h in head) + ' \\\\', '\\hline', '\\endhead']
+    for row in rows: L += [' & '.join(tex_txt(x) for x in row) + ' \\\\', '\\hline']
+    return L + ['\\end{longtable}', '\\endgroup', '']
 
 
 # ---------------------------------------------------------------- main
 def main():
+    import carriers as ca                                   # carrier analysis (same folder as this file)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('items', nargs='+', help='groups: {A B C} {D E Ga=Li24d}')
     ap.add_argument('-o', '--out', default='report.docx')
@@ -2511,6 +2575,9 @@ def main():
     ap.add_argument('--rad-model', choices=['exp', 'gauss', 'sigmoid'], default='sigmoid', help='radius of influence: model of the r95 vs T panel')
     ap.add_argument('--radius-only', action='store_true', help='compute only the radius of influence (no docx / tex / pdf, nothing else recomputed)')
     ap.add_argument('--no-radius', action='store_true', help='skip the radius of influence')
+    ap.add_argument('--rad-table-taus', type=float, nargs='*', help='radius table at the end of the report: only these tau (ps); default all (as radius_avg.py)')
+    ap.add_argument('--no-carriers', action='store_true', help='skip the carrier analysis (carriers.py) in the report')
+    ca.add_args(ap)
     ap.add_argument('--no-plain', action='store_true', help='radius of influence: skip the extra plain-MSD fit (radius_plainmsd/)')
     ap.add_argument('--recompute', action='store_true', help='ignore cached sitedev, rmsd and local-density results')
     lio.add_config_args(ap)
@@ -2543,13 +2610,32 @@ def main():
     pool = make_pool(sp, os.path.join(os.path.dirname(os.path.abspath(a.out)), 'shellpool'), a.pool_min_n)
     if not a.no_radius: radius_both()
     tabs = make_tables(groups, sd, p, cm)
+    extra = []
+    if not a.no_carriers:
+        try:
+            car = ca.run_carriers(groups, a, os.path.join(os.path.dirname(os.path.abspath(a.out)), 'carriers'), a.recompute)
+        except Exception as e:                       # the rest of the report must not depend on it
+            import traceback
+            warn(f'carrier analysis failed: {e}\n{traceback.format_exc(limit=3)}'); car = None
+        if car:
+            extra.append(dict(title=f"Carrier analysis: mobile Li, vacancies, percolation, site energies ({car['T']} K)", text=car['text'],
+                              figs=car['figs'], head=car['head'], rows=car['rows'], pt=6))
+    if not a.no_radius:
+        rt = radius_sigmoid_table(os.path.join(outdir_rad, 'radius_summary.csv'), a.rad_table_taus)
+        if rt:
+            extra.append(dict(title='Radius of influence per dopant (sigmoid fits)', head=rt[0], rows=rt[1], pt=8,
+                              text='One row per dopant element: mean, standard deviation (over the valid temperature x tau fits, n) and median of the sigmoid '
+                                   'r95 (radius where the fitted MSD deficit has fallen to 5 % of the plateau) and r50 (half recovery), and the depth A. '
+                                   'Only valid fits: A >= 0.1 and r95 inside the measured range (same selection as radius_avg.py).'))
+        else:
+            warn('radius table: no valid sigmoid fit found (radius/radius_summary.csv missing or empty)')
 
     global SVG_MODE
     SVG_MODE = False
-    doc = build_report(groups, sd, p, rm, tabs, rh, pool)
+    doc = build_report(groups, sd, p, rm, tabs, rh, pool, extra)
     doc.save(a.out)
     print(f'wrote {os.path.abspath(a.out)}  ({len(groups)} group(s), png)')
-    tex = write_tex(groups, sd, rm, a.out, tabs, rh, pool)
+    tex = write_tex(groups, sd, rm, a.out, tabs, rh, pool, extra)
     print(f'wrote {tex}  (figures in {os.path.join(os.path.dirname(tex), FIGDIR)}/)')
     # pdf: same report built again with svg pictures, converted by LibreOffice (vector)
     soffice = shutil.which('soffice') or shutil.which('libreoffice')
@@ -2559,7 +2645,7 @@ def main():
     base = os.path.splitext(os.path.basename(a.out))[0]
     with tempfile.TemporaryDirectory() as tmp:
         tdoc = os.path.join(tmp, base + '.docx')
-        build_report(groups, sd, p, rm, tabs, rh, pool).save(tdoc)
+        build_report(groups, sd, p, rm, tabs, rh, pool, extra).save(tdoc)
         subprocess.run([soffice, '--headless', '--convert-to', 'pdf', '--outdir', tmp, tdoc], check=True)
         pdf = os.path.join(os.path.dirname(os.path.abspath(a.out)), base + '.pdf')
         shutil.move(os.path.join(tmp, base + '.pdf'), pdf)
