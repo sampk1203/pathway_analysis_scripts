@@ -51,7 +51,22 @@ OUTPUTS  <outdir>/  dF_radial_long.csv  dF_summary.csv
   Markers: open = sparse (lower bound), x = not converged. Grey = d < rmin.  Every .png also gets an .svg (llzo_svg).
 Cache: <folder>/dfr/<name>/ (pure: ref_T<T>K.npz, doped: dfr_T<T>K.json); --recompute ignores it. Cached grids of the pure cell make reruns with
 other --dr / --rmax / flags cheap for the reference but the doped cells are read again from their dumps.
-Limit: a fixed-site dopant model. A dopant that hops, or Li-Li exclusion, are not separated from 'energy'; F is a free energy (PMF), not a DFT energy.
+Limit: Li-Li exclusion is not separated from 'energy'; F is a free energy (PMF), not a DFT energy.
+
+MOVING CENTRE (default; --static = old fixed time-mean centre, with the 24d/96h split)
+  Per dopant the centre is its path smoothed over --dop-smooth-ps (vibration out, hops in). Every frame, all Li are shifted by -centre(t) (periodic),
+  so the dopant sits at the origin of a dopant-frame density; shells are distances to the origin. No ownership competition: dopant i uses only the
+  complete sphere r < r_own(i) = min(rmax, half the 5th-percentile distance to any other dopant): per-dopant curves do not depend on how many
+  dopants the cell has. 'pooled' = volume-weighted merge of the dopants. Only site class 'all' (a static 24d/96h class map has no meaning in a moving frame).
+  Reference: each frame the centre is mapped to its nearest ideal site of the dopant's sublattice; the pure-cell density around those virtual
+  sites is mixed with the visit fractions (sites visited < --site-wmin of the time are dropped). Frames > 1 A from every such site are counted
+  (frac_far in the json 'dopants' entry; warning above 10 %).
+  Empty bins are NOT joined by a line any more (the old 24d 'drop' was a straight line across bins without voxels of that class).
+MASTER CURVES  dF_master.png / dF_master.csv: per dopant element, site 'all', individual-dopant curves, valid bins only (not sparse, not
+  non-converged, r >= rmin). Weights 1/(se^2 + --se-floor^2).
+  B: per T the weighted mean of dF/kT over dopants and systems; curve = mean over T, band = min-max over T.
+  A: per bin weighted least squares of dF/kT = a + b/T over all points of that element (>= 3 distinct T): dE = k_B b (eV), dS/k = -a, errors from
+     the fit covariance x max(1, chi2/dof). dashed in the first panel: A rebuilt at the median T, for comparison with B.
 """
 import argparse, csv, glob, json, os, re, sys, warnings
 
@@ -79,7 +94,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.spatial import cKDTree
 
 NAN = float('nan')
-VERSION = 'dfr-v1'
+VERSION = 'dfr-v2'
 SPLIT = (('24d', 0), ('96h', 1))
 SUBLAT = {'li24d': ('Li', '24d'), 'li96h': ('Li', '96h'), 'li': ('Li', None), 'la': ('La', None), 'zr': ('Zr', None)}
 DEFAULT_SPEC = ('Li', '24d')
@@ -109,7 +124,10 @@ def add_args(ap):
     g.add_argument('--min-vox', type=int, default=20, help='bins with fewer voxels are flagged sparse')
     g.add_argument('--conv-tol', type=float, default=0.5, help='NOT CONVERGED when the two halves differ by more than this, kT')
     g.add_argument('--thr', type=float, default=0.1, help='|dF| threshold of r_thr, kT')
-    g.add_argument('--no-split', action='store_true', help='skip the 24d / 96h split (default: all, 24d and 96h)')
+    g.add_argument('--no-split', action='store_true', help='static mode only: skip the 24d / 96h split (default: all, 24d and 96h)')
+    g.add_argument('--static', action='store_true', help='old behaviour: fixed time-mean dopant centre, ownership shells, 24d/96h split')
+    g.add_argument('--site-wmin', type=float, default=0.02, help='moving mode: reference sites visited less than this fraction of the frames are dropped')
+    g.add_argument('--se-floor', type=float, default=0.05, help='master curves: floor added (in quadrature) to se_kT before weighting, kT')
     return g
 
 
@@ -320,10 +338,131 @@ def summarise(rows, a):
     return sorted(out, key=lambda d: (nat(d['system']), d['T'], d['site']))
 
 
+# ---------------------------------------------------------------- moving dopant centre (dopant-frame density)
+def moving_dopants(cfg, traj, drift):
+    """one dict per dopant atom: label, element, pf (F,3) fractional position per frame of the smoothed path (vibration out, hops kept)."""
+    out, cnt = [], {}
+    for t in cfg['dopant_types']:
+        idx = np.where(traj.types == t)[0]
+        idx = idx[np.argsort(traj.ids[idx])]
+        for i in idx:
+            el = cfg['types'][t]
+            cnt[el] = cnt.get(el, 0) + 1
+            x = lio.dopant_xyz(cfg, traj, drift, i)
+            out.append(dict(label=f'{el}{cnt[el]}', element=el, pf=np.mod((x - traj.lo) / traj.L, 1.0), x=x))
+    return out
+
+
+def mix_sites(ps, ws):
+    """ensemble mixture of shell profiles of different reference sites with visit fractions ws."""
+    ws = np.asarray(ws, float) / np.sum(ws)
+    z = np.nan_to_num
+    nv = sum(w * p['nvox'] for w, p in zip(ws, ps))
+    with np.errstate(all='ignore'):
+        rho = np.where(nv > 0, sum(w * z(p['rho']) for w, p in zip(ws, ps)), np.nan)
+        rb = np.where(nv > 0, sum(w * z(p['rho_b']) for w, p in zip(ws, ps)), np.nan)
+    return dict(nvox=nv, rho=rho, rho_b=rb, cnt=sum(w * p['cnt'] for w, p in zip(ws, ps)))
+
+
+def merge_vol(ps):
+    """volume-weighted merge of the shell profiles of several dopants (same cell)."""
+    z = np.nan_to_num
+    nv = sum(p['nvox'] for p in ps)
+    with np.errstate(all='ignore'):
+        rho = np.where(nv > 0, sum(z(p['rho']) * p['nvox'] for p in ps) / nv, np.nan)
+        rb = np.where(nv > 0, sum(z(p['rho_b']) * p['nvox'] for p in ps) / nv, np.nan)
+    return dict(nvox=nv, rho=rho, rho_b=rb, cnt=sum(p['cnt'] for p in ps))
+
+
+def _rows(c, pd_, pr_, rec, who, system, element, ndop, T, edges, nb, a):
+    kT = lio.KB_EV * T
+    rows = []
+    for k in range(nb):
+        if not (pd_['nvox'][k] > 0 and pr_['nvox'][k] > 0): continue
+        rows.append(dict(system=system, element=element, n_dopant=ndop, T=int(T), who=who, site='all',
+                         r_lo=float(edges[k]), r_hi=float(edges[k + 1]), r_mid=float(edges[k] + 0.5 * a.dr),
+                         n_vox=int(pd_['nvox'][k]), vol_A3=float(pd_['nvox'][k] * rec['vvol']),
+                         cnt_doped=float(pd_['cnt'][k]), cnt_pure=float(pr_['cnt'][k]),
+                         F_kT=float(c['F'][k]), Fref_kT=float(c['Fr'][k]), dF_kT=float(c['dF'][k]), dF_eV=float(c['dF'][k] * kT),
+                         se_kT=float(c['se'][k]), half1_kT=float(c['h1'][k]), half2_kT=float(c['h2'][k]),
+                         half_diff_kT=float(c['hd'][k]), Fmax_kT=float(c['fmax'][k]), sparse=int(c['sparse'][k]),
+                         nonconv=int(c['nonconv'][k]), below_rmin=int(edges[k + 1] <= a.rmin + 1e-9)))
+    return rows
+
+
+def analyse_moving(cfg, traj, drift, frac, L, lat, rr, t_ref, spec, a, T):
+    """dopant-frame analysis -> (rows, info). frac (F,N,3) Li in [0,1)."""
+    md = moving_dopants(cfg, traj, drift)
+    if not md: raise RuntimeError('no dopant atoms in this folder (cfg dopant_types matched no atom)')
+    F_ = frac.shape[0]
+    Lt = traj.L
+    rmax = a.rmax or 0.5 * float(min(L.min(), rr['L'].min()))
+    nb = int(np.floor(rmax / a.dr + 1e-9))
+    edges = np.arange(nb + 1) * a.dr
+    n = grid_n(L, a.spacing)
+    d0, _ = dist_owner(n, L, np.zeros((1, 3)))                    # distance of every voxel centre to the dopant (origin)
+    b0 = np.floor(d0 / a.dr).astype(np.int64)
+    system = cfg['name']
+    element = '+'.join(sorted({d['element'] for d in md}))
+    pds, prs, info, recs = [], [], [], []
+    for i, d in enumerate(md):
+        r_own = rmax
+        for j, e in enumerate(md):
+            if j == i: continue
+            dd = d['pf'] - e['pf']; dd -= np.rint(dd)
+            r_own = min(r_own, 0.5 * float(np.percentile(np.linalg.norm(dd * Lt, axis=1), 5)))
+        nb_i = max(1, int(np.floor(r_own / a.dr + 1e-9)))
+        rec = make_rec(np.mod(frac - d['pf'][:, None, :], 1.0), L, a)
+        bd = np.where(b0 >= nb_i, nb, b0)
+        pd_ = profile(rec, bd, None, None, None, None, nb)
+        sp = spec.get(d['element'], DEFAULT_SPEC)
+        sites = site_list(lat['ws'], sp)
+        S = np.mod(sites + lat['t'], 1.0)
+        idx_t, far = np.empty(F_, int), np.empty(F_)
+        for s0 in range(0, F_, 256):
+            sl = slice(s0, s0 + 256)
+            dd = S[None, :, :] - d['pf'][sl, None, :]; dd -= np.rint(dd)
+            r_ = np.linalg.norm(dd * Lt[sl, None, :], axis=2)
+            idx_t[sl], far[sl] = r_.argmin(1), r_.min(1)
+        w = np.bincount(idx_t, minlength=len(S)) / F_
+        keep = np.where(w >= a.site_wmin)[0]
+        if not len(keep): keep = np.array([int(w.argmax())])
+        ffar = float(np.mean(far > 1.0))
+        if ffar > 0.1: warn(f"{system} T={T}: {d['label']} is > 1 A from every {sp[0]}{sp[1] or ''} site in {100 * ffar:.0f}% of the frames (other sublattice / in transit): reference unreliable")
+        prl = []
+        for s_ in keep:
+            c = np.mod(sites[s_] + t_ref, 1.0) * rr['L']
+            dr_, _ = dist_owner(rr['n'], rr['L'], c[None])
+            br = np.floor(dr_ / a.dr).astype(np.int64)
+            prl.append(profile(rr, np.where(br >= nb_i, nb, br), None, None, None, None, nb))
+        pr_ = mix_sites(prl, w[keep])
+        pds.append(pd_); prs.append(pr_); recs.append(rec)
+        xs = d['x'] - d['x'].mean(axis=0)
+        info.append(dict(label=d['label'], element=d['element'], site=f"{sp[0]}{sp[1] or ''}", r_own_A=float(r_own),
+                         rms_smoothed_A=float(np.sqrt((xs ** 2).sum(-1).mean())), frac_far=ffar, dist_to_site_A=float(far.mean()),
+                         visits={int(k): float(w[k]) for k in keep}))
+    rows = []
+    items = [(d['label'], pd_, pr_) for d, pd_, pr_ in zip(md, pds, prs)] if len(md) > 1 else []
+    items.append(('pooled', merge_vol(pds) if len(md) > 1 else pds[0], merge_vol(prs) if len(md) > 1 else prs[0]))
+    for who, pd_, pr_ in items:
+        c = compare(pd_, pr_, recs[0], rr, a, nb)
+        rows += _rows(c, pd_, pr_, recs[0], who, system, element, len(md), T, edges, nb, a)
+    return rows, info
+
+
+def _doped_moving(folder, cfg, T, a, outp, key, refp, spec, traj, drift, frac, L):
+    lat = lattice(cfg, traj, drift, L, a.cif)
+    rr, t_ref, fold_ref = load_ref(refp)
+    if fold_ref != lat['fold']: raise RuntimeError(f'fold of the pure cell {fold_ref} != {lat["fold"]} of {cfg["name"]}')
+    rows, info = analyse_moving(cfg, traj, drift, frac, L, lat, rr, t_ref, spec, a, T)
+    os.makedirs(os.path.dirname(outp), exist_ok=True)
+    with open(outp, 'w') as fh: json.dump(dict(key=key, rows=rows, dopants=info, lat_rms=lat['rms']), fh)
+
+
 # ---------------------------------------------------------------- cache, per (folder, T) tasks
 def cache_key(a, cfg, dump, extra=''):
     return repr((VERSION, a.spacing, a.sigma, a.sigma_min, a.sigma_max, a.no_adaptive, a.dr, a.rmax, a.blocks, a.min_count, a.min_vox, a.conv_tol,
-                 a.tmin, a.no_split, tuple(sorted(cfg['types'].items())), tuple(cfg['dopant_types']), dump, os.path.getmtime(dump),
+                 a.tmin, a.no_split, a.static, a.site_wmin, cfg.get('dop_smooth_ps'), tuple(sorted(cfg['types'].items())), tuple(cfg['dopant_types']), dump, os.path.getmtime(dump),
                  os.path.getmtime(a.cif), extra))
 
 
@@ -365,6 +504,9 @@ def compute_doped(task):
     folder, cfg, T, a, outp, key, refp, spec = task
     try:
         dump, traj, drift, frac, L = load_cell(cfg, T, a)
+        if not a.static:
+            _doped_moving(folder, cfg, T, a, outp, key, refp, spec, traj, drift, frac, L)
+            return None
         rd = make_rec(frac, L, a)
         lat = lattice(cfg, traj, drift, L, a.cif)
         rd['cls'] = class_grid(rd['n'], L, np.mod(lat['ws']['frac'] + lat['t'], 1.0), lat['ws']['kind'])
@@ -499,16 +641,23 @@ def write_csv(rows, summ, outdir):
 
 def curve(rows, who, site):
     rs = sorted((r for r in rows if r['who'] == who and r['site'] == site), key=lambda r: r['r_mid'])
-    g = lambda k: np.array([r[k] for r in rs], float)
-    return {k: g(k) for k in ('r_mid', 'F_kT', 'Fref_kT', 'dF_kT', 'dF_eV', 'se_kT', 'sparse', 'nonconv', 'below_rmin')}
+    dr = rs[0]['r_hi'] - rs[0]['r_lo']
+    k = np.array([int(round((r['r_mid'] - 0.5 * dr) / dr)) for r in rs])
+    full = np.arange(k.min(), k.max() + 1)
+    out = {'r_mid': (full + 0.5) * dr}
+    for name in ('F_kT', 'Fref_kT', 'dF_kT', 'dF_eV', 'se_kT', 'sparse', 'nonconv', 'below_rmin'):
+        v = np.full(len(full), 0.0 if name in ('sparse', 'nonconv', 'below_rmin') else NAN)
+        v[k - k.min()] = [r[name] for r in rs]
+        out[name] = v
+    return out                                                    # bins without voxels are NaN: lines break there instead of joining
 
 
 def _draw(ax, c, y, color, lw=1.6, label=None, band=None, marks=True):
     ok = np.isfinite(y)
-    ax.plot(c['r_mid'][ok], y[ok], '-', color=color, lw=lw, label=label)
+    ax.plot(c['r_mid'], np.where(ok, y, np.nan), '-', color=color, lw=lw, label=label)
     if band is not None:
         m = ok & np.isfinite(band)
-        ax.fill_between(c['r_mid'][m], (y - band)[m], (y + band)[m], color=color, alpha=0.2, lw=0)
+        ax.fill_between(c['r_mid'], np.where(m, y - band, 0), np.where(m, y + band, 0), where=m, color=color, alpha=0.2, lw=0)
     if marks:
         sp = ok & (c['sparse'] > 0)
         nc = ok & (c['nonconv'] > 0) & ~sp
@@ -521,6 +670,7 @@ def _draw(ax, c, y, color, lw=1.6, label=None, band=None, marks=True):
 def _finish(ax, a, ylabel, xlabel=True):
     ax.axvspan(0, a.rmin, color='0.9', zorder=0)
     ax.axhline(0, color='0.5', lw=0.6)
+    if getattr(a, 'xmax', None): ax.set_xlim(0, a.xmax)           # every plot spans 0 .. outer edge of the last bin
     ax.set_ylabel(ylabel)
     if xlabel: ax.set_xlabel('distance to dopant (A)')
 
@@ -612,6 +762,92 @@ def make_figs(rows, order, outdir, a):
     return out
 
 
+# ---------------------------------------------------------------- master curves: one per dopant element
+def _wls(x, y, w):
+    X = np.stack([np.ones_like(x), x], 1)
+    XtW = X.T * w
+    cov = np.linalg.inv(XtW @ X)
+    beta = cov @ (XtW @ y)
+    dof = len(y) - 2
+    sc = max(1.0, float((w * (y - X @ beta) ** 2).sum() / dof)) if dof > 0 else 1.0
+    return beta, cov * sc
+
+
+def master_points(rows, a):
+    """valid points of the individual-dopant curves (site 'all'): {element: [(bin, r_mid, T, y, weight, curve id)]}."""
+    out = {}
+    for r in rows:
+        if r['site'] != 'all' or (r['n_dopant'] > 1) == (r['who'] == 'pooled'): continue
+        if r['sparse'] or r['nonconv'] or r['below_rmin'] or not (np.isfinite(r['dF_kT']) and np.isfinite(r['se_kT'])): continue
+        el = r['element'] if r['who'] == 'pooled' else re.sub(r'\d+$', '', r['who'])
+        dr = r['r_hi'] - r['r_lo']
+        out.setdefault(el, []).append((int(round((r['r_mid'] - 0.5 * dr) / dr)), r['r_mid'], r['T'], r['dF_kT'],
+                                       1.0 / (r['se_kT'] ** 2 + a.se_floor ** 2), (r['system'], r['who'])))
+    return out
+
+
+def master_curves(rows, a):
+    """-> {element: dict(B=..., A=..., Tref=...)}; each curve = list of (r_mid, value, lo, hi, n_curves, n_T)."""
+    res = {}
+    for el, pts in master_points(rows, a).items():
+        Ts = sorted({p[2] for p in pts})
+        Tref = float(np.median(Ts))
+        B, A, E, S, R = [], [], [], [], []
+        for k in sorted({p[0] for p in pts}):
+            ps = [p for p in pts if p[0] == k]
+            r_mid = ps[0][1]
+            mT = []
+            for T in sorted({p[2] for p in ps}):
+                q = [p for p in ps if p[2] == T]
+                mT.append(sum(p[4] * p[3] for p in q) / sum(p[4] for p in q))
+            B.append((r_mid, float(np.mean(mT)), float(np.min(mT)), float(np.max(mT)), len({p[5] for p in ps}), len(mT)))
+            if len({p[2] for p in ps}) >= 3:
+                x = np.array([1000.0 / p[2] for p in ps]); y = np.array([p[3] for p in ps]); w = np.array([p[4] for p in ps])
+                beta, cov = _wls(x, y, w)
+                a_, b_ = beta[0], beta[1]
+                dE, edE = 1000.0 * lio.KB_EV * b_, 1000.0 * lio.KB_EV * float(np.sqrt(cov[1, 1]))
+                xr = 1000.0 / Tref
+                e_rec = float(np.sqrt(cov[0, 0] + xr ** 2 * cov[1, 1] + 2 * xr * cov[0, 1]))
+                n_c, n_T = len({p[5] for p in ps}), len({p[2] for p in ps})
+                E.append((r_mid, float(dE), float(dE - edE), float(dE + edE), n_c, n_T))
+                S.append((r_mid, float(-a_), float(-a_ - np.sqrt(cov[0, 0])), float(-a_ + np.sqrt(cov[0, 0])), n_c, n_T))
+                v = float(a_ + b_ * xr)
+                R.append((r_mid, v, v - e_rec, v + e_rec, n_c, n_T))
+        res[el] = dict(B=B, E=E, S=S, R=R, Tref=Tref, Ts=Ts)
+    return res
+
+
+def fig_master(rows, outdir, a):
+    res = master_curves(rows, a)
+    if not res: return
+    cmap = plt.get_cmap('tab10')
+    fig, axs = plt.subplots(1, 3, figsize=(14.0, 4.2), sharex=True)
+    lines = []
+    for i, (el, m) in enumerate(sorted(res.items())):
+        col = cmap(i)
+        for key, ax, lab in (('B', axs[0], f'{el} B: mean over T (band = T min-max)'), ('E', axs[1], el), ('S', axs[2], el)):
+            c = np.array(m[key], float)
+            if not len(c): continue
+            ax.plot(c[:, 0], c[:, 1], '-', color=col, lw=1.8, label=lab)
+            ax.fill_between(c[:, 0], c[:, 2], c[:, 3], color=col, alpha=0.2, lw=0)
+        c = np.array(m['R'], float)
+        if len(c): axs[0].plot(c[:, 0], c[:, 1], '--', color=col, lw=1.2, label=f"{el} A: fit at {m['Tref']:.0f} K")
+        for key, name in (('B', 'B_dF_kT'), ('E', 'A_dE_eV'), ('S', 'A_dS_over_k'), ('R', 'A_dF_kT_at_Tref')):
+            for r_mid, v, lo, hi, n_c, n_T in m[key]: lines.append((el, name, r_mid, v, lo, hi, n_c, n_T))
+    _finish(axs[0], a, 'dF / kT  (doped - pure)')
+    _finish(axs[1], a, 'dE (eV) = k_B x slope of dF/kT vs 1/T')
+    _finish(axs[2], a, 'dS / k = -intercept')
+    axs[0].set_title('B: T-averaged   A: fit at median T (dashed)', fontsize=8)
+    axs[1].set_title('A: energetic part, T independent', fontsize=8)
+    axs[2].set_title('A: entropic part, T independent', fontsize=8)
+    axs[0].legend(fontsize=6)
+    axs[1].legend(fontsize=7)
+    _savefig(fig, os.path.join(outdir, 'dF_master.png'))
+    with open(os.path.join(outdir, 'dF_master.csv'), 'w', newline='') as fh:
+        w = csv.writer(fh); w.writerow(['element', 'curve', 'r_mid', 'value', 'lo', 'hi', 'n_curves', 'n_T'])
+        for l in lines: w.writerow([l[0], l[1]] + [f'{x:.6g}' if isinstance(x, float) else x for x in l[2:]])
+
+
 def print_summary(summ):
     print('\nsystem          T    site   dF_ext/kT  at_r   r_thr  nonconv  (pooled, r >= rmin; * = r_thr reaches the edge: lower bound)')
     for d in summ:
@@ -642,10 +878,12 @@ def main():
     res, order = collect(groups, a, a.recompute)
     rows = all_rows(res, order)
     if not rows: sys.exit('no result')
+    a.xmax = max(r['r_hi'] for r in rows)
     summ = summarise(rows, a)
     write_csv(rows, summ, a.outdir)
     figs = make_figs(rows, order, a.outdir, a)
-    print(f'[dF_radial] {a.outdir}/dF_radial_long.csv dF_summary.csv  ({len(figs)} figures + dF_Tscan_*)')
+    fig_master(rows, a.outdir, a)
+    print(f'[dF_radial] {a.outdir}/dF_radial_long.csv dF_summary.csv dF_master.csv  ({len(figs)} figures + dF_Tscan_* + dF_master)')
     print_summary(summ)
 
 

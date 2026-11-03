@@ -35,6 +35,11 @@ Synthetic selftest tests the code, not the physics.
 """
 import argparse, csv, math, os, sys, tempfile, warnings
 import numpy as np
+try:                                    # global 1200 dpi png + one png per panel (+ svg copy), see with_flag/llzo_svg.py
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'with_flag'))
+    import llzo_svg  # noqa: F401
+except ImportError:
+    pass
 
 VFU = 12.9827 ** 3 / 8
 
